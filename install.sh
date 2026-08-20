@@ -184,15 +184,17 @@ try:
         out = []
         out.append(f"  {WHITE}{BOLD}Select your Debrid provider (Use ↑/↓ or 1-3, then Enter):{RESET}")
         for i, opt in enumerate(options):
+            opt_name = opt["name"]
+            opt_link = opt["link"]
             if i == sel:
                 cursor = f"  {CYAN}❯{RESET} {BOLD}{CYAN}"
-                badge = f"[{i+1}] {opt['name']}"
-                link_str = f" ──► {YELLOW}{opt['link']}{RESET}" if opt["link"] else ""
+                badge = f"[{i+1}] {opt_name}"
+                link_str = f" ──► {YELLOW}{opt_link}{RESET}" if opt_link else ""
                 out.append(f"{cursor}{badge}{RESET}{link_str}")
             else:
                 cursor = "    "
-                badge = f"[{i+1}] {opt['name']}"
-                link_str = f" ──► {DIM}{opt['link']}{RESET}" if opt["link"] else ""
+                badge = f"[{i+1}] {opt_name}"
+                link_str = f" ──► {DIM}{opt_link}{RESET}" if opt_link else ""
                 out.append(f"{cursor}{DIM}{badge}{link_str}{RESET}")
 
         out.append(f"\n  {DIM}↑/↓ or j/k: Move | Enter: Select{RESET}")
@@ -218,8 +220,10 @@ finally:
 
 chosen = options[sel]
 if chosen["key_name"]:
-    print(f"  {YELLOW}➔ Get your {chosen['prompt']} at: {BOLD}{chosen['link']}{RESET}")
-    sys.stdout.write(f"  Paste your {chosen['prompt']}: ")
+    prompt_text = chosen["prompt"]
+    link_url = chosen["link"]
+    print(f"  {YELLOW}➔ Get your {prompt_text} at: {BOLD}{link_url}{RESET}")
+    sys.stdout.write(f"  Paste your {prompt_text}: ")
     sys.stdout.flush()
     user_key = ""
     while True:
@@ -245,7 +249,7 @@ if chosen["key_name"]:
         cfg = {chosen["key_name"]: user_key}
         with open(CONFIG_FILE, "w") as f:
             json.dump(cfg, f, indent=2)
-        print(f"  {GREEN}✓ {chosen['prompt']} saved successfully!{RESET}")
+        print(f"  {GREEN}✓ {prompt_text} saved successfully!{RESET}")
 else:
     print(f"  {DIM}✓ Free P2P mode enabled. You can add a Debrid key anytime via: nitrate --config{RESET}")
 '
