@@ -1,0 +1,11 @@
+name: 💡 Feature Request
+description: Suggest an idea or new feature for Nitrate
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Your Suggestion
+      placeholder: "Describe the feature you would like to see..."
+    validations:
+      required: true

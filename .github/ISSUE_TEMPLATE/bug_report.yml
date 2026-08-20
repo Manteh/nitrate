@@ -1,0 +1,23 @@
+name: 🐛 Bug Report
+description: Report a bug or issue with Nitrate
+labels: ["bug"]
+body:
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      placeholder: "e.g., macOS 14.5 (Apple Silicon), Ubuntu 24.04, Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      placeholder: "A clear and concise description of what the bug is."
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Terminal Output / Error Logs
+      placeholder: "Paste terminal output here..."

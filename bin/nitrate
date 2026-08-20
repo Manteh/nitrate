@@ -23,6 +23,7 @@ else:
     CONFIG_DIR = os.path.expanduser("~/.config/nitrate")
 
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+VERSION = "1.0.0"
 HISTORY_FILE = os.path.join(CONFIG_DIR, "history.json")
 
 # Backwards-compatibility with torrentio-mpv
@@ -525,10 +526,27 @@ def main():
     parser.add_argument("-t", "--start", type=str, default=None, help="Start position (e.g. '-10:00' or '01:15:00')")
     parser.add_argument("-k", "--key", type=str, default=None, help="Debrid API Key")
     parser.add_argument("-y", "--auto", action="store_true", help="Auto-play first stream result")
+    parser.add_argument("-v", "--version", action="version", version="🎬 Nitrate v1.0.0")
+    parser.add_argument("--update", action="store_true", help="Update Nitrate to latest version")
     parser.add_argument("--config", action="store_true", help="Configure Debrid API Keys")
 
     args = parser.parse_args()
     cfg = load_config()
+
+    if args.update:
+        print(f"\n{B_CYAN}▶ Checking for Nitrate updates from GitHub...{RESET}")
+        try:
+            url = "https://raw.githubusercontent.com/Manteh/nitrate/main/bin/nitrate"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            new_code = urllib.request.urlopen(req, timeout=10).read().decode("utf-8")
+            script_path = os.path.realpath(__file__)
+            with open(script_path, "w", encoding="utf-8") as f:
+                f.write(new_code)
+            os.chmod(script_path, 0o755)
+            print(f"{B_GREEN}✓ Nitrate updated successfully!{RESET}\n")
+        except Exception as e:
+            print(f"{RED}[-] Update failed: {e}{RESET}")
+        return
 
     if args.config:
         print(f"\n{B_CYAN}⚙️  Nitrate Debrid Configuration{RESET}")

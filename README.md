@@ -8,12 +8,12 @@
 
 <br/>
 
+[![Release](https://img.shields.io/github/v/release/Manteh/nitrate?style=for-the-badge&logo=github&color=purple)](https://github.com/Manteh/nitrate/releases/latest)
+[![CI Status](https://img.shields.io/github/actions/workflow/status/Manteh/nitrate/ci.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=CI)](https://github.com/Manteh/nitrate/actions)
 [![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20%2F%20Intel-000000?style=for-the-badge&logo=apple&logoColor=white)](https://apple.com)
 [![Linux](https://img.shields.io/badge/Linux-Ubuntu%20%2F%20Arch%20%2F%20Fedora-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://kernel.org)
 [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://microsoft.com)
-[![Python 3.8+](https://img.shields.io/badge/Python-3.8+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![mpv](https://img.shields.io/badge/Player-mpv%20%2B%20libplacebo-8B008B?style=for-the-badge&logo=mpv&logoColor=white)](https://mpv.io/)
-[![TorBox](https://img.shields.io/badge/Debrid-TorBox%20%2F%20Real--Debrid-228B22?style=for-the-badge)](https://torbox.app)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
 <br/>
 
