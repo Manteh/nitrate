@@ -558,26 +558,37 @@ def main():
         return
 
     if args.config:
-        print(f"\n{B_CYAN}⚙️  Nitrate Debrid Configuration{RESET}")
-        print(f"  Current TorBox Key:      {BOLD}{cfg.get('torbox_key') or '(None)'}{RESET}")
-        print(f"  Current Real-Debrid Key: {BOLD}{cfg.get('rd_api_key') or '(None)'}{RESET}\n")
-        
-        print("Select provider to update:")
-        print("  [1] TorBox API Key       (https://torbox.app/settings)")
-        print("  [2] Real-Debrid API Key  (https://real-debrid.com/apitoken)")
-        choice = input("Select [1-2] (or press Enter to cancel): ").strip()
-        if choice == "1":
-            new_key = input("Enter new TorBox API Key: ").strip()
+        options = [
+            {"id": "torbox", "name": "TorBox (Recommended)", "link": "https://torbox.app/settings", "key": "torbox_key", "title": "TorBox API Key"},
+            {"id": "rd", "name": "Real-Debrid", "link": "https://real-debrid.com/apitoken", "key": "rd_api_key", "title": "Real-Debrid API Key"},
+            {"id": "p2p", "name": "Free P2P mode (No Debrid / Direct torrenting)", "link": "", "key": None, "title": ""}
+        ]
+
+        def render_prov_item(it, is_sel, idx):
+            curr_key = cfg.get(it["key"]) if it["key"] else None
+            status = f" {B_GREEN}(Configured){RESET}" if curr_key else ""
+            link_info = f" {DIM}──► {it['link']}{RESET}" if it["link"] else ""
+            return f"[{idx}] {BOLD}{it['name']}{RESET}{status}{link_info}"
+
+        selected_prov, _ = interactive_select(
+            options,
+            title="⚙️  Nitrate Debrid Account Setup (Use ↑/↓ and Enter):",
+            render_item_fn=render_prov_item,
+            allow_search=False
+        )
+
+        if not selected_prov:
+            return
+
+        if selected_prov["key"]:
+            print(f"\n  {YELLOW}➔ Get your {selected_prov['title']} at: {BOLD}{selected_prov['link']}{RESET}")
+            new_key = input(f"  Paste your {selected_prov['title']}: ").strip()
             if new_key:
-                cfg["torbox_key"] = new_key
+                cfg[selected_prov["key"]] = new_key
                 save_config(cfg)
-                print(f"{GREEN}✓ TorBox key saved.{RESET}\n")
-        elif choice == "2":
-            new_key = input("Enter new Real-Debrid API Key: ").strip()
-            if new_key:
-                cfg["rd_api_key"] = new_key
-                save_config(cfg)
-                print(f"{GREEN}✓ Real-Debrid key saved.{RESET}\n")
+                print(f"  {B_GREEN}✓ {selected_prov['title']} saved successfully!{RESET}\n")
+        else:
+            print(f"\n  {DIM}✓ Free P2P mode enabled. You can configure a Debrid key anytime via: nitrate --config{RESET}\n")
         return
 
     torbox_key = args.key or cfg.get("torbox_key")
