@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
-# ==========================================
-# 🎬 NITRATE — Zero-Friction 1-Line Installer
-# ==========================================
+# Disable slow Homebrew git auto-updates & hint spam
+export HOMEBREW_NO_AUTO_UPDATE=1
+export HOMEBREW_NO_ENV_HINTS=1
 
 ESC="\033["
 RESET="${ESC}0m"
@@ -31,15 +31,14 @@ echo -e "${RESET}"
 
 echo -e "${B_WHITE}Starting zero-friction setup...${RESET}\n"
 
-# 1. Check / Install MPV
+# 1. Check / Install MPV (with live progress output)
 echo -e "${CYAN}▶ Checking video player (mpv)...${RESET}"
 if command -v mpv >/dev/null 2>&1; then
     echo -e "  ${B_GREEN}✓ mpv is already installed!${RESET}"
 else
-    echo -e "  ${YELLOW}mpv not found. Installing via Homebrew/package manager...${RESET}"
+    echo -e "  ${YELLOW}mpv not found. Installing via package manager (showing live progress below)...${RESET}\n"
     if [[ "$OSTYPE" == "darwin"* ]]; then
         if command -v brew >/dev/null 2>&1; then
-            echo -e "  ${DIM}Running brew install mpv...${RESET}"
             brew install mpv
         else
             echo -e "  ${RED}Homebrew not found. Please install Homebrew first: https://brew.sh${RESET}"
@@ -55,6 +54,7 @@ else
         echo -e "  ${RED}Please install mpv from https://mpv.io${RESET}"
         exit 1
     fi
+    echo -e "\n  ${B_GREEN}✓ mpv installed successfully!${RESET}"
 fi
 
 # 2. Automated MPV Configuration (Studio-Grade libplacebo / HDR / English defaults)
@@ -88,14 +88,15 @@ else
     echo -e "  ${DIM}✓ Existing mpv.conf preserved${RESET}"
 fi
 
-# 3. Install Nitrate Executable
+# 3. Install Nitrate Executable with Live Progress Bar
 echo -e "\n${CYAN}▶ Installing nitrate binary...${RESET}"
 INSTALL_DIR="$HOME/.local/bin"
 mkdir -p "$INSTALL_DIR"
 TARGET_BIN="$INSTALL_DIR/nitrate"
 
-# Download binary
-curl -fsSL https://raw.githubusercontent.com/Manteh/nitrate/main/bin/nitrate -o "$TARGET_BIN"
+# Download binary with visible progress bar
+echo -e "  ${DIM}Downloading Nitrate from GitHub...${RESET}"
+curl -# -fSL https://raw.githubusercontent.com/Manteh/nitrate/main/bin/nitrate -o "$TARGET_BIN"
 chmod +x "$TARGET_BIN"
 echo -e "  ${B_GREEN}✓ Installed executable to $TARGET_BIN${RESET}"
 
@@ -115,16 +116,11 @@ if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
     echo -e "  ${B_GREEN}✓ Added ~/.local/bin to your PATH in $RC_FILE${RESET}"
 fi
 
-# 4. Interactive Debrid Setup (Arrow-Key TUI)
+# 4. Interactive Debrid Setup (Arrow-Key TUI directly connected to TTY)
 echo -e "\n${CYAN}▶ Debrid Account Setup (Instant 4K Streaming without VPN)${RESET}"
 CONFIG_DIR="$HOME/.config/nitrate"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 mkdir -p "$CONFIG_DIR"
-
-TTY_DEV="/dev/tty"
-if [ ! -e "$TTY_DEV" ]; then
-    TTY_DEV="&0"
-fi
 
 python3 -c '
 import sys, os, termios, tty, json
@@ -186,7 +182,7 @@ sys.stdout.write(f"{ESC}?25l")
 try:
     while True:
         out = []
-        out.append(f"  {WHITE}{BOLD}Select your Debrid provider (Use ↑/↓ and Enter):{RESET}")
+        out.append(f"  {WHITE}{BOLD}Select your Debrid provider (Use ↑/↓ or 1-3, then Enter):{RESET}")
         for i, opt in enumerate(options):
             if i == sel:
                 cursor = f"  {CYAN}❯{RESET} {BOLD}{CYAN}"
@@ -225,7 +221,6 @@ if chosen["key_name"]:
     print(f"  {YELLOW}➔ Get your {chosen['prompt']} at: {BOLD}{chosen['link']}{RESET}")
     sys.stdout.write(f"  Paste your {chosen['prompt']}: ")
     sys.stdout.flush()
-    # Read user input from tty
     user_key = ""
     while True:
         c = os.read(tty_fd, 1).decode("utf-8", errors="ignore")
