@@ -93,7 +93,7 @@ nitrate (TrueHD / DTS-HD MA)  │ ██████████████═�
 | **VPN Required?** | No | **Yes (Mandatory)** | **No (Zero VPN needed)** |
 | **Rendering Engine** | Browser / Electron web player | Basic player | **Direct-to-GPU (`libplacebo` / `gpu-next`)** |
 | **Platforms** | OS specific web / app limits | OS specific apps | **macOS, Linux & Windows (Universal)** |
-| **App Size / Bloat** | 500 MB+ RAM hog | 100 MB Desktop App | **Single standalone Python script (<35KB)** |
+| **Disk & RAM Footprint** | 500 MB – 1.5 GB+ RAM *(Electron)* | 100 MB App + Background Daemons | **<35KB CLI + Native MPV C-engine (~150MB disk, ~45MB RAM)** |
 | **Catalog** | Fragmented & disappearing monthly | Large | **Everything ever made in cinema history** |
 
 ---
