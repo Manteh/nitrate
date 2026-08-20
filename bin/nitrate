@@ -1,0 +1,807 @@
+#!/usr/bin/env python3
+"""
+🎬 NITRATE — The Audiophile & Cinephile Terminal Streamer
+Direct-to-GPU 4K Dolby Vision, HDR10, and Lossless Master Audio streamed directly to MPV.
+Cross-Platform: macOS, Linux, and Windows. Zero external dependencies.
+"""
+
+import sys
+import os
+import json
+import urllib.request
+import urllib.parse
+import subprocess
+import argparse
+import re
+import socket
+import shutil
+
+# --- Cross-Platform Config Directory ---
+if os.name == "nt":
+    CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "nitrate")
+else:
+    CONFIG_DIR = os.path.expanduser("~/.config/nitrate")
+
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+HISTORY_FILE = os.path.join(CONFIG_DIR, "history.json")
+
+# Backwards-compatibility with torrentio-mpv
+OLD_CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "torrentio-mpv") if os.name == "nt" else os.path.expanduser("~/.config/torrentio-mpv")
+OLD_CONFIG_FILE = os.path.join(OLD_CONFIG_DIR, "config.json")
+
+# --- ANSI Colors & Styles ---
+ESC = "\033["
+RESET = f"{ESC}0m"
+BOLD = f"{ESC}1m"
+DIM = f"{ESC}2m"
+UNDERLINE = f"{ESC}4m"
+REVERSE = f"{ESC}7m"
+
+RED = f"{ESC}31m"
+GREEN = f"{ESC}32m"
+YELLOW = f"{ESC}33m"
+BLUE = f"{ESC}34m"
+MAGENTA = f"{ESC}35m"
+CYAN = f"{ESC}36m"
+WHITE = f"{ESC}37m"
+
+B_RED = f"{ESC}91m"
+B_GREEN = f"{ESC}92m"
+B_YELLOW = f"{ESC}93m"
+B_BLUE = f"{ESC}94m"
+B_MAGENTA = f"{ESC}95m"
+B_CYAN = f"{ESC}96m"
+B_WHITE = f"{ESC}97m"
+
+# --- Cross-Platform Key Input ---
+if os.name == "nt":
+    import msvcrt
+    import ctypes
+    # Enable ANSI Virtual Terminal Sequences on Windows 10/11
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+    except Exception:
+        pass
+
+    def get_key():
+        ch = msvcrt.getwch()
+        if ch in ("\x00", "\xe0"):
+            ch2 = msvcrt.getwch()
+            if ch2 == "H": return "UP"
+            if ch2 == "P": return "DOWN"
+            if ch2 == "M": return "RIGHT"
+            if ch2 == "K": return "LEFT"
+            if ch2 == "I": return "PAGE_UP"
+            if ch2 == "Q": return "PAGE_DOWN"
+            return "UNKNOWN"
+        elif ch in ("\r", "\n"):
+            return "ENTER"
+        elif ch in ("\x08", "\x7f"):
+            return "BACKSPACE"
+        elif ch == "\t":
+            return "TAB"
+        elif ch == "\x1b":
+            return "ESC"
+        elif ch == "\x03":
+            return "CTRL_C"
+        return ch
+else:
+    import termios
+    import tty
+
+    def get_key():
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[":
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == "A": return "UP"
+                    if ch3 == "B": return "DOWN"
+                    if ch3 == "C": return "RIGHT"
+                    if ch3 == "D": return "LEFT"
+                    if ch3 == "5": return "PAGE_UP"
+                    if ch3 == "6": return "PAGE_DOWN"
+                    if ch3 == "Z": return "SHIFT_TAB"
+                    return "ESC"
+                return "ESC"
+            elif ch in ("\r", "\n"):
+                return "ENTER"
+            elif ch in ("\x7f", "\x08"):
+                return "BACKSPACE"
+            elif ch == "\t":
+                return "TAB"
+            elif ch == "\x03":
+                return "CTRL_C"
+            return ch
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+def load_config():
+    cfg = {}
+    if os.path.exists(OLD_CONFIG_FILE):
+        try:
+            with open(OLD_CONFIG_FILE, "r") as f:
+                cfg.update(json.load(f))
+        except Exception:
+            pass
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                cfg.update(json.load(f))
+        except Exception:
+            pass
+    return cfg
+
+def save_config(cfg):
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def add_to_history(item):
+    try:
+        history = load_history()
+        history = [h for h in history if not (h.get("imdb_id") == item.get("imdb_id") and h.get("season") == item.get("season") and h.get("episode") == item.get("episode"))]
+        history.insert(0, item)
+        history = history[:15]
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(history, f, indent=2)
+    except Exception:
+        pass
+
+def http_get_json(url):
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+def is_stremio_server_running():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1)
+        res = s.connect_ex(('127.0.0.1', 11470))
+        s.close()
+        return res == 0
+    except Exception:
+        return False
+
+# --- Interactive Selector TUI (Alternate Screen Buffer) ---
+def interactive_select(
+    items,
+    title="Select an option:",
+    render_item_fn=None,
+    filter_fn=None,
+    categories=None,
+    active_category=0,
+    page_size=8,
+    allow_search=True,
+    help_text=None
+):
+    if not items:
+        return None, None
+
+    if not sys.stdin.isatty():
+        print(f"\n{title}")
+        for idx, it in enumerate(items, 1):
+            rendered = render_item_fn(it, False, idx) if render_item_fn else str(it)
+            if isinstance(rendered, list):
+                rendered = rendered[0]
+            print(f"  [{idx}] {rendered}")
+        choice = input(f"Select [1-{len(items)}] (or q): ").strip()
+        if choice.lower() == "q" or not choice.isdigit():
+            return None, None
+        idx = int(choice) - 1
+        return (items[idx], idx) if 0 <= idx < len(items) else (None, None)
+
+    search_query = ""
+    selected_idx = 0
+    current_cat_idx = active_category
+
+    # Enter alternate screen buffer & hide cursor
+    sys.stdout.write("\033[?1049h\033[?25l")
+    sys.stdout.flush()
+
+    try:
+        while True:
+            cols = shutil.get_terminal_size((80, 24)).columns
+            div_len = max(20, min(cols - 2, 72))
+
+            filtered_items = items
+            if categories and filter_fn:
+                filtered_items = [it for it in filtered_items if filter_fn(it, categories[current_cat_idx])]
+
+            if search_query:
+                q = search_query.lower()
+                filtered_items = [
+                    it for it in filtered_items
+                    if q in (str(it).lower() if not render_item_fn else (
+                        render_item_fn(it, False, 0)[0].lower() if isinstance(render_item_fn(it, False, 0), list)
+                        else render_item_fn(it, False, 0).lower()
+                    ))
+                ]
+
+            total_filtered = len(filtered_items)
+            if selected_idx >= total_filtered:
+                selected_idx = max(0, total_filtered - 1)
+
+            start_idx = max(0, min(selected_idx - page_size // 2, max(0, total_filtered - page_size)))
+            end_idx = min(start_idx + page_size, total_filtered)
+
+            out = []
+            out.append(f"{B_WHITE}{BOLD}{title}{RESET}")
+
+            if categories:
+                cat_bar = ["  "]
+                for i, cat in enumerate(categories):
+                    if i == current_cat_idx:
+                        cat_bar.append(f"{B_CYAN}{REVERSE} {cat} {RESET} ")
+                    else:
+                        cat_bar.append(f"{DIM}[{cat}]{RESET} ")
+                out.append("".join(cat_bar))
+
+            if allow_search and search_query:
+                out.append(f"  {YELLOW}🔍 Search:{RESET} {BOLD}{search_query}{RESET}{B_CYAN}▌{RESET}")
+
+            out.append(f"{DIM}{'─' * div_len}{RESET}")
+
+            if total_filtered == 0:
+                out.append(f"  {DIM}(No matching results for '{search_query}'){RESET}")
+            else:
+                for idx in range(start_idx, end_idx):
+                    item = filtered_items[idx]
+                    is_selected = (idx == selected_idx)
+
+                    if render_item_fn:
+                        rendered_lines = render_item_fn(item, is_selected, idx + 1)
+                        if isinstance(rendered_lines, str):
+                            rendered_lines = [rendered_lines]
+                    else:
+                        rendered_lines = [str(item)]
+
+                    if is_selected:
+                        cursor = f"{B_CYAN}❯{RESET} "
+                        out.append(f"{cursor}{B_CYAN}{BOLD}{rendered_lines[0]}{RESET}")
+                    else:
+                        cursor = "  "
+                        out.append(f"{cursor}{rendered_lines[0]}")
+
+                    for sub in rendered_lines[1:]:
+                        out.append(f"     {sub}")
+
+            out.append(f"{DIM}{'─' * div_len}{RESET}")
+            pos_info = f"({selected_idx + 1}/{total_filtered})" if total_filtered > 0 else "(0/0)"
+            default_help = f" {B_CYAN}↑/↓{RESET}{DIM}: Move | {RESET}{B_CYAN}Enter{RESET}{DIM}: Select | {RESET}{B_CYAN}Tab/←/→{RESET}{DIM}: Filter | {RESET}{B_CYAN}Type{RESET}{DIM}: Search | {RESET}{B_CYAN}q{RESET}{DIM}: Quit{RESET}"
+            help_str = help_text if help_text else default_help
+            out.append(f"{DIM}{pos_info:<8}{RESET}{help_str}")
+
+            sys.stdout.write("\033[H")
+            for line in out:
+                sys.stdout.write(line + "\033[K\n")
+            sys.stdout.write("\033[J")
+            sys.stdout.flush()
+
+            key = get_key()
+
+            if key in ("UP", "k", "K"):
+                if selected_idx > 0:
+                    selected_idx -= 1
+                elif total_filtered > 0:
+                    selected_idx = total_filtered - 1
+            elif key in ("DOWN", "j", "J"):
+                if selected_idx < total_filtered - 1:
+                    selected_idx += 1
+                elif total_filtered > 0:
+                    selected_idx = 0
+            elif key == "PAGE_UP":
+                selected_idx = max(0, selected_idx - page_size)
+            elif key == "PAGE_DOWN":
+                selected_idx = min(max(0, total_filtered - 1), selected_idx + page_size)
+            elif key in ("TAB", "RIGHT", "l", "L"):
+                if categories:
+                    current_cat_idx = (current_cat_idx + 1) % len(categories)
+                    selected_idx = 0
+            elif key in ("SHIFT_TAB", "LEFT", "h", "H"):
+                if categories:
+                    current_cat_idx = (current_cat_idx - 1) % len(categories)
+                    selected_idx = 0
+            elif key == "ENTER":
+                if total_filtered > 0:
+                    selected_item = filtered_items[selected_idx]
+                    orig_idx = items.index(selected_item)
+                    return selected_item, orig_idx
+                return None, None
+            elif key in ("ESC", "CTRL_C"):
+                return None, None
+            elif key == "BACKSPACE":
+                if search_query:
+                    search_query = search_query[:-1]
+                    selected_idx = 0
+            elif key in ("q", "Q") and not search_query:
+                return None, None
+            elif len(key) == 1 and key.isprintable():
+                if allow_search:
+                    search_query += key
+                    selected_idx = 0
+    finally:
+        sys.stdout.write("\033[?25h\033[?1049l")
+        sys.stdout.flush()
+
+# --- Cinemeta Metadata Fetching ---
+def search_cinemeta(query, item_type="movie"):
+    encoded_query = urllib.parse.quote(query)
+    url = f"https://v3-cinemeta.strem.io/catalog/{item_type}/top/search={encoded_query}.json"
+    try:
+        data = http_get_json(url)
+        return data.get("metas", [])
+    except Exception:
+        return []
+
+def get_series_details(imdb_id):
+    url = f"https://v3-cinemeta.strem.io/meta/series/{imdb_id}.json"
+    try:
+        data = http_get_json(url)
+        return data.get("meta", {})
+    except Exception:
+        return {}
+
+def get_torrentio_streams(imdb_id, item_type="movie", season=1, episode=1, torbox_key=None, rd_api_key=None):
+    if item_type == "series":
+        stream_id = f"{imdb_id}:{season}:{episode}"
+    else:
+        stream_id = imdb_id
+
+    addons = []
+    if torbox_key:
+        addons.append(f"torbox={torbox_key}")
+    if rd_api_key:
+        addons.append(f"realdebrid={rd_api_key}")
+    addons.append("")
+
+    streams = []
+    for prefix in addons:
+        if prefix:
+            url = f"https://torrentio.strem.fun/{prefix}/stream/{item_type}/{stream_id}.json"
+        else:
+            url = f"https://torrentio.strem.fun/stream/{item_type}/{stream_id}.json"
+        try:
+            data = http_get_json(url)
+            res = data.get("streams", [])
+            for s in res:
+                if s not in streams:
+                    streams.append(s)
+        except Exception:
+            pass
+
+    return streams
+
+def parse_stream_info(stream):
+    title = stream.get("title", stream.get("name", "Unknown Stream"))
+    name = stream.get("name", "")
+    url = stream.get("url", "")
+    info_hash = stream.get("infoHash", "")
+    file_idx = stream.get("fileIdx", 0)
+    sources = stream.get("sources", [])
+
+    is_error = False
+    if "TB error" in name or "RD error" in name or "Expired" in title or "failed_access" in url:
+        is_error = True
+
+    is_debrid = "[TB+]" in name or "[RD+]" in name or "torbox" in url or "realdebrid" in url or (bool(url) and not is_error)
+
+    res = "Other"
+    for r in ["4K", "2160p", "1080p", "720p", "480p", "DVDRip", "CAM"]:
+        if r.lower() in (name + "\n" + title).lower():
+            res = "4K" if r.lower() in ["4k", "2160p"] else r
+            break
+
+    seeders_count = 0
+    seed_match = re.search(r"👤\s*(\d+)", title)
+    if seed_match:
+        seeders_count = int(seed_match.group(1))
+
+    size_str = ""
+    size_match = re.search(r"💾\s*([\d\.]+\s*(?:GB|MB))", title)
+    if size_match:
+        size_str = size_match.group(1)
+
+    has_dv = "DV" in name or "Dolby Vision" in title
+    has_hdr = "HDR" in name or "HDR10" in title
+    has_51 = "5.1" in title or "6CH" in title or "DDP5.1" in title
+
+    return {
+        "raw": stream,
+        "name": name.replace("\n", " "),
+        "title": title,
+        "title_lines": [line.strip() for line in title.split("\n") if line.strip()],
+        "url": url,
+        "info_hash": info_hash,
+        "file_idx": file_idx,
+        "sources": sources,
+        "is_error": is_error,
+        "is_debrid": is_debrid,
+        "resolution": res,
+        "seeders": seeders_count,
+        "size": size_str,
+        "has_dv": has_dv,
+        "has_hdr": has_hdr,
+        "has_51": has_51
+    }
+
+def play_stream(stream_info, start_time=None, extra_title=""):
+    url = stream_info["url"]
+    info_hash = stream_info["info_hash"]
+    file_idx = stream_info["file_idx"]
+    sources = stream_info["sources"]
+
+    mpv_args = [
+        "mpv",
+        "--force-window=immediate",
+        "--alang=en,eng,lit,lt",
+        "--slang=en,eng,lit,lt",
+        "--subs-with-matching-audio=no",
+        "--script-opts=osc-layout=bottombar",
+        "--input-builtin-bindings=yes",
+    ]
+
+    if extra_title:
+        mpv_args.append(f"--title={extra_title}")
+
+    if start_time:
+        mpv_args.append(f"--start={start_time}")
+
+    if url and not stream_info["is_error"] and (url.startswith("http://") or url.startswith("https://")):
+        print(f"\n{B_GREEN}{BOLD}⚡ Launching MPV with Debrid instant encrypted stream...{RESET}")
+        cmd = mpv_args + [url]
+        print(f"{DIM}[>] Running: mpv '{url[:80]}...'{RESET}\n")
+        subprocess.run(cmd)
+        return
+
+    if info_hash and is_stremio_server_running():
+        stremio_stream_url = f"http://127.0.0.1:11470/{info_hash}/{file_idx}"
+        print(f"\n{B_CYAN}{BOLD}📡 Launching MPV via Stremio Engine...{RESET}")
+        cmd = mpv_args + [stremio_stream_url]
+        subprocess.run(cmd)
+        return
+
+    if info_hash:
+        print(f"\n{B_YELLOW}{BOLD}📡 Launching MPV via WebTorrent P2P...{RESET}")
+        trackers = [
+            "udp://tracker.opentrackr.org:1337/announce",
+            "udp://open.stealth.si:80/announce",
+            "udp://tracker.torrent.eu.org:451/announce",
+            "udp://open.demonii.com:1337/announce",
+            "udp://exodus.desync.com:6969/announce"
+        ]
+        for s in sources:
+            if s.startswith("tracker:") and s[8:] not in trackers:
+                trackers.append(s[8:])
+
+        tr_params = "".join([f"&tr={urllib.parse.quote(t)}" for t in trackers])
+        magnet = f"magnet:?xt=urn:btih:{info_hash}{tr_params}"
+
+        player_args = []
+        if start_time:
+            player_args.append(f"--start={start_time}")
+        player_args.extend([
+            "--alang=en,eng,lit,lt",
+            "--slang=en,eng,lit,lt",
+            "--subs-with-matching-audio=no",
+            "--force-window=immediate"
+        ])
+
+        cmd = [
+            "webtorrent",
+            magnet,
+            "--select", str(file_idx),
+            "--mpv",
+            f"--player-args={' '.join(player_args)}"
+        ]
+        subprocess.run(cmd)
+        return
+
+    print(f"{RED}[-] Error: Stream does not contain valid direct URL or infoHash.{RESET}")
+
+def main():
+    parser = argparse.ArgumentParser(description="🎬 Nitrate — Direct-to-GPU 4K Terminal Streamer")
+    parser.add_argument("query", nargs="*", help="Movie/TV Show title or IMDb ID (e.g. 'Mindhunter' or 'tt5290382')")
+    parser.add_argument("-s", "--season", type=int, default=None, help="Season number for TV shows")
+    parser.add_argument("-e", "--episode", type=int, default=None, help="Episode number for TV shows")
+    parser.add_argument("-t", "--start", type=str, default=None, help="Start position (e.g. '-10:00' or '01:15:00')")
+    parser.add_argument("-k", "--key", type=str, default=None, help="Debrid API Key")
+    parser.add_argument("-y", "--auto", action="store_true", help="Auto-play first stream result")
+    parser.add_argument("--config", action="store_true", help="Configure Debrid API Keys")
+
+    args = parser.parse_args()
+    cfg = load_config()
+
+    if args.config:
+        print(f"\n{B_CYAN}⚙️  Nitrate Debrid Configuration{RESET}")
+        print(f"  Current TorBox Key:      {BOLD}{cfg.get('torbox_key') or '(None)'}{RESET}")
+        print(f"  Current Real-Debrid Key: {BOLD}{cfg.get('rd_api_key') or '(None)'}{RESET}\n")
+        
+        print("Select provider to update:")
+        print("  [1] TorBox API Key       (https://torbox.app/settings)")
+        print("  [2] Real-Debrid API Key  (https://real-debrid.com/apitoken)")
+        choice = input("Select [1-2] (or press Enter to cancel): ").strip()
+        if choice == "1":
+            new_key = input("Enter new TorBox API Key: ").strip()
+            if new_key:
+                cfg["torbox_key"] = new_key
+                save_config(cfg)
+                print(f"{GREEN}✓ TorBox key saved.{RESET}\n")
+        elif choice == "2":
+            new_key = input("Enter new Real-Debrid API Key: ").strip()
+            if new_key:
+                cfg["rd_api_key"] = new_key
+                save_config(cfg)
+                print(f"{GREEN}✓ Real-Debrid key saved.{RESET}\n")
+        return
+
+    torbox_key = args.key or cfg.get("torbox_key")
+    rd_api_key = cfg.get("rd_api_key")
+
+    query_str = " ".join(args.query).strip() if args.query else ""
+
+    if not query_str:
+        history = load_history()
+        menu_items = []
+        if history:
+            for h in history[:5]:
+                ep_text = f" S{h.get('season', 1):02d}E{h.get('episode', 1):02d}" if h.get("type") == "series" else ""
+                menu_items.append({
+                    "action": "resume",
+                    "data": h,
+                    "title": f"🕒 Resume: {h.get('title')}{ep_text} ({h.get('year', '')})"
+                })
+        menu_items.append({"action": "search", "title": "🔍 Search for a Movie or TV Show"})
+        menu_items.append({"action": "config", "title": "⚙️  Configure Debrid API Keys"})
+
+        selected_menu, _ = interactive_select(
+            menu_items,
+            title="🎬 NITRATE — Direct-to-GPU Cinema Player",
+            render_item_fn=lambda it, sel, idx: it["title"],
+            allow_search=False
+        )
+
+        if not selected_menu:
+            sys.exit(0)
+
+        if selected_menu["action"] == "config":
+            parser.parse_args(["--config"])
+            return
+
+        if selected_menu["action"] == "resume":
+            h = selected_menu["data"]
+            query_str = h.get("imdb_id") or h.get("title")
+            args.season = h.get("season")
+            args.episode = h.get("episode")
+        else:
+            query_str = input(f"\n{B_CYAN}Enter Movie or TV Show title:{RESET} ").strip()
+            if not query_str:
+                sys.exit(0)
+
+    imdb_id = None
+    item_type = "movie"
+    item_title = query_str
+    item_year = ""
+
+    if query_str.startswith("tt") and query_str[2:].isdigit():
+        imdb_id = query_str
+        if args.season is not None:
+            item_type = "series"
+    else:
+        print(f"\n{DIM}Searching Cinemeta catalog for '{query_str}'...{RESET}")
+        movies = search_cinemeta(query_str, "movie")
+        series = search_cinemeta(query_str, "series")
+
+        results = []
+        for s in series[:6]:
+            results.append((s, "series"))
+        for m in movies[:6]:
+            results.append((m, "movie"))
+
+        if not results:
+            print(f"{RED}[-] No titles found for '{query_str}'.{RESET}")
+            sys.exit(1)
+
+        def score_result(it):
+            meta, rtype = it
+            name = meta.get("name", "").lower()
+            ql = query_str.lower()
+            if name == ql: return (0, 0 if rtype == "series" else 1)
+            if name.startswith(ql): return (1, 0 if rtype == "series" else 1)
+            if ql in name: return (2, 0)
+            return (3, 0)
+
+        results.sort(key=score_result)
+
+        def render_title_item(item_tuple, is_selected, idx):
+            res, rtype = item_tuple
+            name = res.get("name", "Unknown")
+            year = res.get("releaseInfo", res.get("year", ""))
+            badge = f"{B_BLUE}[SERIES]{RESET}" if rtype == "series" else f"{MAGENTA}[MOVIE]{RESET}"
+            imdb = res.get("imdb_id", "N/A")
+            return f"{BOLD}{name}{RESET} {DIM}({year}){RESET} {badge} {DIM}({imdb}){RESET}"
+
+        selected_tuple, _ = interactive_select(
+            results,
+            title=f"🎬 Select a Title for '{query_str}':",
+            render_item_fn=render_title_item,
+            allow_search=True
+        )
+
+        if not selected_tuple:
+            sys.exit(0)
+
+        selected_meta, item_type = selected_tuple
+        imdb_id = selected_meta.get("imdb_id") or selected_meta.get("id")
+        item_title = selected_meta.get("name", query_str)
+        item_year = selected_meta.get("releaseInfo", selected_meta.get("year", ""))
+
+    season = args.season
+    episode = args.episode
+
+    if item_type == "series":
+        print(f"{DIM}Fetching episode catalog for {item_title}...{RESET}")
+        series_meta = get_series_details(imdb_id)
+        videos = series_meta.get("videos", [])
+
+        if videos and (season is None or episode is None):
+            seasons_map = {}
+            for v in videos:
+                s_num = v.get("season", 1)
+                if s_num not in seasons_map:
+                    seasons_map[s_num] = []
+                seasons_map[s_num].append(v)
+
+            sorted_seasons = sorted(seasons_map.keys())
+
+            if season is None:
+                if len(sorted_seasons) == 1:
+                    season = sorted_seasons[0]
+                else:
+                    season_items = [
+                        {"season": s, "count": len(seasons_map[s]), "title": f"Season {s} ({len(seasons_map[s])} Episodes)"}
+                        for s in sorted_seasons
+                    ]
+                    selected_s_item, _ = interactive_select(
+                        season_items,
+                        title=f"📺 Select Season for '{item_title}':",
+                        render_item_fn=lambda it, sel, idx: f"{BOLD}Season {it['season']:02d}{RESET} {DIM}({it['count']} episodes){RESET}",
+                        allow_search=False
+                    )
+                    if not selected_s_item:
+                        sys.exit(0)
+                    season = selected_s_item["season"]
+
+            if episode is None:
+                episodes = seasons_map.get(season, [])
+                episodes.sort(key=lambda x: x.get("number", 0))
+
+                def render_ep_item(ep, sel, idx):
+                    ep_num = ep.get("number", idx)
+                    ep_name = ep.get("name", f"Episode {ep_num}")
+                    released = ep.get("released", "")[:10]
+                    rel_str = f" {DIM}({released}){RESET}" if released else ""
+                    return f"{BOLD}E{ep_num:02d}{RESET} - {ep_name}{rel_str}"
+
+                selected_ep, _ = interactive_select(
+                    episodes,
+                    title=f"📺 Select Episode for '{item_title}' Season {season}:",
+                    render_item_fn=render_ep_item,
+                    allow_search=True
+                )
+                if not selected_ep:
+                    sys.exit(0)
+                episode = selected_ep.get("number", 1)
+
+        elif season is None:
+            season = 1
+        elif episode is None:
+            episode = 1
+
+    ep_label = f" S{season:02d}E{episode:02d}" if item_type == "series" else ""
+    print(f"\n{DIM}Fetching streams for {BOLD}{item_title}{ep_label}{RESET}{DIM}...{RESET}")
+    streams = get_torrentio_streams(imdb_id, item_type, season, episode, torbox_key=torbox_key, rd_api_key=rd_api_key)
+
+    parsed_streams = [parse_stream_info(s) for s in streams]
+    valid_streams = [s for s in parsed_streams if not s["is_error"]]
+    display_streams = valid_streams if valid_streams else parsed_streams
+
+    if not display_streams:
+        print(f"{RED}[-] No streams found for {item_title}{ep_label}.{RESET}")
+        sys.exit(1)
+
+    res_score = {"4K": 4, "1080p": 3, "720p": 2, "480p": 1, "Other": 0}
+    display_streams.sort(
+        key=lambda s: (
+            1 if s["is_debrid"] else 0,
+            res_score.get(s["resolution"], 0),
+            s["seeders"]
+        ),
+        reverse=True
+    )
+
+    if args.auto:
+        add_to_history({"imdb_id": imdb_id, "title": item_title, "year": item_year, "type": item_type, "season": season, "episode": episode})
+        play_stream(display_streams[0], start_time=args.start, extra_title=f"{item_title}{ep_label}")
+        return
+
+    categories = ["All", "⚡ Debrid", "4K", "1080p", "720p"]
+    def filter_by_cat(stream, cat):
+        if cat == "All": return True
+        if cat == "⚡ Debrid": return stream["is_debrid"]
+        if cat == "4K": return stream["resolution"] == "4K"
+        if cat == "1080p": return stream["resolution"] == "1080p"
+        if cat == "720p": return stream["resolution"] == "720p"
+        return True
+
+    def render_stream_item(s, is_selected, idx):
+        tb_badge = f"{B_GREEN}{BOLD}⚡ [DEBRID]{RESET} " if s["is_debrid"] else f"{DIM}[P2P]   {RESET} "
+        res_color = B_CYAN if s["resolution"] == "4K" else (B_YELLOW if s["resolution"] == "1080p" else WHITE)
+        res_badge = f"{res_color}{BOLD}{s['resolution']:<5}{RESET}"
+
+        tags = []
+        if s["has_dv"]: tags.append(f"{MAGENTA}DV{RESET}")
+        if s["has_hdr"]: tags.append(f"{B_BLUE}HDR{RESET}")
+        if s["has_51"]: tags.append(f"{CYAN}5.1{RESET}")
+        tag_str = f" [{' '.join(tags)}]" if tags else ""
+
+        seeds_str = f"{DIM}👤 {s['seeders']:<3}{RESET}"
+        size_str = f"{B_WHITE}{s['size']:<8}{RESET}" if s["size"] else ""
+
+        line1 = f"{tb_badge}{res_badge}{tag_str:<16} | {size_str} | {seeds_str}"
+        
+        rel_name = s["title_lines"][0] if s["title_lines"] else s["name"]
+        cols = shutil.get_terminal_size((80, 24)).columns
+        max_rel_len = max(20, cols - 10)
+        if len(rel_name) > max_rel_len:
+            rel_name = rel_name[:max_rel_len - 3] + "..."
+        line2 = f"{DIM}└─ {rel_name}{RESET}"
+
+        return [line1, line2]
+
+    header_title = f"🎬 {BOLD}{item_title}{ep_label}{RESET} ({len(display_streams)} streams found)"
+    selected_stream, _ = interactive_select(
+        display_streams,
+        title=header_title,
+        render_item_fn=render_stream_item,
+        categories=categories,
+        filter_fn=filter_by_cat,
+        active_category=0,
+        page_size=7,
+        allow_search=True
+    )
+
+    if not selected_stream:
+        sys.exit(0)
+
+    add_to_history({
+        "imdb_id": imdb_id,
+        "title": item_title,
+        "year": item_year,
+        "type": item_type,
+        "season": season,
+        "episode": episode
+    })
+
+    play_stream(selected_stream, start_time=args.start, extra_title=f"{item_title}{ep_label}")
+
+if __name__ == "__main__":
+    main()
