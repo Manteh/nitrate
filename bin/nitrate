@@ -32,7 +32,7 @@ else:
     CONFIG_DIR = os.path.expanduser("~/.config/nitrate")
 
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 HISTORY_FILE = os.path.join(CONFIG_DIR, "history.json")
 
 # Backwards-compatibility with torrentio-mpv
@@ -604,6 +604,12 @@ def play_stream(stream_info, start_time=None, extra_title="", item_metadata=None
     mpv_args = [
         "mpv",
         "--force-window=immediate",
+        "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "--demuxer-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
+        "--stream-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5",
+        "--cache=yes",
+        "--demuxer-max-bytes=512MiB",
+        "--demuxer-readahead-secs=30",
         "--alang=en,eng,lit,lt",
         "--slang=en,eng,lit,lt",
         "--subs-with-matching-audio=no",
