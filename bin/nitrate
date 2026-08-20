@@ -32,7 +32,7 @@ else:
     CONFIG_DIR = os.path.expanduser("~/.config/nitrate")
 
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 HISTORY_FILE = os.path.join(CONFIG_DIR, "history.json")
 
 # Backwards-compatibility with torrentio-mpv
@@ -634,11 +634,25 @@ def play_stream(stream_info, start_time=None, extra_title="", item_metadata=None
 
     try:
         if url and not stream_info["is_error"] and (url.startswith("http://") or url.startswith("https://")):
-            print(f"\n{B_GREEN}{BOLD}⚡ Launching MPV with Debrid instant encrypted stream...{RESET}")
-            cmd = mpv_args + [url]
-            print(f"{DIM}[>] Running: mpv '{url[:80]}...'{RESET}\n")
+            print(f"\n{B_GREEN}{BOLD}⚡ Resolving Debrid stream link...{RESET}")
+            final_url = url
+            try:
+                check_req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"})
+                with urllib.request.urlopen(check_req, timeout=6) as resp:
+                    resolved = resp.geturl()
+                    if "failed_access" in resolved:
+                        print(f"\n{B_RED}❌ TorBox Error: Server timed out / rate-limited on this specific stream.{RESET}")
+                        print(f"{YELLOW}👉 Tip: Please choose a different 4K stream from the menu (e.g. FraMeSToR or FLUX).{RESET}\n")
+                        return False
+                    final_url = resolved
+            except Exception:
+                pass
+
+            print(f"{B_GREEN}{BOLD}⚡ Launching MPV with direct encrypted stream...{RESET}")
+            cmd = mpv_args + [final_url]
+            print(f"{DIM}[>] Running: mpv '{final_url[:80]}...'{RESET}\n")
             subprocess.run(cmd)
-            return
+            return True
 
         if info_hash and is_stremio_server_running():
             stremio_stream_url = f"http://127.0.0.1:11470/{info_hash}/{file_idx}"
