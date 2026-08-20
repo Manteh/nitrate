@@ -32,7 +32,7 @@ else:
     CONFIG_DIR = os.path.expanduser("~/.config/nitrate")
 
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-VERSION = "1.0.2"
+VERSION = "1.1.0"
 HISTORY_FILE = os.path.join(CONFIG_DIR, "history.json")
 
 # Backwards-compatibility with torrentio-mpv
@@ -160,6 +160,96 @@ def load_history():
         except Exception:
             pass
     return []
+
+import threading
+
+def format_time(seconds):
+    if not seconds: return "00:00"
+    s = int(seconds)
+    m, s = divmod(s, 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+def update_playback_history(item, time_pos, duration=None):
+    if not item or not time_pos: return
+    try:
+        history = load_history()
+        target_item = None
+        for h in history:
+            if h.get("imdb_id") == item.get("imdb_id") and h.get("season") == item.get("season") and h.get("episode") == item.get("episode"):
+                target_item = h
+                break
+        
+        if not target_item:
+            target_item = dict(item)
+            history.insert(0, target_item)
+        
+        target_item["time_pos"] = round(time_pos, 1)
+        target_item["time_str"] = format_time(time_pos)
+        if duration and duration > 0:
+            target_item["duration"] = round(duration, 1)
+            target_item["duration_str"] = format_time(duration)
+            target_item["pct"] = int((time_pos / duration) * 100)
+            if target_item["pct"] >= 95:
+                target_item["completed"] = True
+
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(history[:20], f, indent=2)
+    except Exception:
+        pass
+
+def track_mpv_ipc(sock_path, item_metadata, stop_event):
+    if os.name == "nt":
+        return
+    time_val = 0
+    duration = 0
+
+    while not stop_event.is_set():
+        try:
+            if not os.path.exists(sock_path):
+                import time; time.sleep(2)
+                continue
+
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(2)
+            client.connect(sock_path)
+
+            # Query current time position
+            cmd_time = json.dumps({"command": ["get_property", "time-pos"]}) + "\n"
+            client.sendall(cmd_time.encode("utf-8"))
+            resp = client.recv(1024).decode("utf-8", errors="ignore")
+            for line in resp.splitlines():
+                try:
+                    data = json.loads(line)
+                    if "data" in data and isinstance(data["data"], (int, float)):
+                        time_val = data["data"]
+                except Exception:
+                    pass
+
+            # Query duration if not yet cached
+            if not duration or duration <= 0:
+                cmd_dur = json.dumps({"command": ["get_property", "duration"]}) + "\n"
+                client.sendall(cmd_dur.encode("utf-8"))
+                resp = client.recv(1024).decode("utf-8", errors="ignore")
+                for line in resp.splitlines():
+                    try:
+                        data = json.loads(line)
+                        if "data" in data and isinstance(data["data"], (int, float)):
+                            duration = data["data"]
+                    except Exception:
+                        pass
+
+            client.close()
+
+            if time_val > 5 and item_metadata:
+                update_playback_history(item_metadata, time_val, duration)
+        except Exception:
+            pass
+
+        import time; time.sleep(5)
 
 def add_to_history(item):
     try:
@@ -503,11 +593,13 @@ def parse_stream_info(stream):
         "has_51": has_51
     }
 
-def play_stream(stream_info, start_time=None, extra_title=""):
+def play_stream(stream_info, start_time=None, extra_title="", item_metadata=None):
     url = stream_info["url"]
     info_hash = stream_info["info_hash"]
     file_idx = stream_info["file_idx"]
     sources = stream_info["sources"]
+
+    sock_path = f"/tmp/nitrate_mpv_{os.getpid()}.sock"
 
     mpv_args = [
         "mpv",
@@ -519,28 +611,38 @@ def play_stream(stream_info, start_time=None, extra_title=""):
         "--input-builtin-bindings=yes",
     ]
 
+    if os.name != "nt":
+        mpv_args.append(f"--input-ipc-server={sock_path}")
+
     if extra_title:
         mpv_args.append(f"--title={extra_title}")
 
     if start_time:
         mpv_args.append(f"--start={start_time}")
 
-    if url and not stream_info["is_error"] and (url.startswith("http://") or url.startswith("https://")):
-        print(f"\n{B_GREEN}{BOLD}⚡ Launching MPV with Debrid instant encrypted stream...{RESET}")
-        cmd = mpv_args + [url]
-        print(f"{DIM}[>] Running: mpv '{url[:80]}...'{RESET}\n")
-        subprocess.run(cmd)
-        return
+    stop_event = threading.Event()
+    tracker_thread = None
+    if item_metadata and os.name != "nt":
+        tracker_thread = threading.Thread(target=track_mpv_ipc, args=(sock_path, item_metadata, stop_event), daemon=True)
+        tracker_thread.start()
 
-    if info_hash and is_stremio_server_running():
-        stremio_stream_url = f"http://127.0.0.1:11470/{info_hash}/{file_idx}"
-        print(f"\n{B_CYAN}{BOLD}📡 Launching MPV via Stremio Engine...{RESET}")
-        cmd = mpv_args + [stremio_stream_url]
-        subprocess.run(cmd)
-        return
+    try:
+        if url and not stream_info["is_error"] and (url.startswith("http://") or url.startswith("https://")):
+            print(f"\n{B_GREEN}{BOLD}⚡ Launching MPV with Debrid instant encrypted stream...{RESET}")
+            cmd = mpv_args + [url]
+            print(f"{DIM}[>] Running: mpv '{url[:80]}...'{RESET}\n")
+            subprocess.run(cmd)
+            return
 
-    if info_hash:
-        print(f"\n{B_YELLOW}{BOLD}📡 Launching MPV via WebTorrent P2P...{RESET}")
+        if info_hash and is_stremio_server_running():
+            stremio_stream_url = f"http://127.0.0.1:11470/{info_hash}/{file_idx}"
+            print(f"\n{B_CYAN}{BOLD}📡 Launching MPV via Stremio Engine...{RESET}")
+            cmd = mpv_args + [stremio_stream_url]
+            subprocess.run(cmd)
+            return
+
+        if info_hash:
+            print(f"\n{B_YELLOW}{BOLD}📡 Launching MPV via WebTorrent P2P...{RESET}")
         trackers = [
             "udp://tracker.opentrackr.org:1337/announce",
             "udp://open.stealth.si:80/announce",
@@ -574,6 +676,12 @@ def play_stream(stream_info, start_time=None, extra_title=""):
         ]
         subprocess.run(cmd)
         return
+
+    finally:
+        stop_event.set()
+        if os.path.exists(sock_path):
+            try: os.remove(sock_path)
+            except Exception: pass
 
     print(f"{RED}[-] Error: Stream does not contain valid direct URL or infoHash.{RESET}")
 
@@ -671,12 +779,20 @@ def main():
         history = load_history()
         menu_items = []
         if history:
-            for h in history[:5]:
+            for h in history[:6]:
                 ep_text = f" S{h.get('season', 1):02d}E{h.get('episode', 1):02d}" if h.get("type") == "series" else ""
+                time_badge = ""
+                if h.get("time_str"):
+                    dur = f" / {h.get('duration_str')}" if h.get("duration_str") else ""
+                    pct = f" • {h.get('pct')}%" if h.get("pct") is not None else ""
+                    time_badge = f" {B_CYAN}(at {h.get('time_str')}{dur}{pct}){RESET}"
+                elif h.get("year"):
+                    time_badge = f" {DIM}({h.get('year')}){RESET}"
+
                 menu_items.append({
                     "action": "resume",
                     "data": h,
-                    "title": f"🕒 Resume: {h.get('title')}{ep_text} ({h.get('year', '')})"
+                    "title": f"🕒 Resume: {BOLD}{h.get('title')}{RESET}{ep_text}{time_badge}"
                 })
         menu_items.append({"action": "search", "title": "🔍 Search for a Movie or TV Show"})
         menu_items.append({"action": "config", "title": "⚙️  Configure Debrid API Keys"})
@@ -700,6 +816,8 @@ def main():
             query_str = h.get("imdb_id") or h.get("title")
             args.season = h.get("season")
             args.episode = h.get("episode")
+            if h.get("time_pos") and not args.start:
+                args.start = str(int(h.get("time_pos")))
         else:
             query_str = input(f"\n{B_CYAN}Enter Movie or TV Show title:{RESET} ").strip()
             if not query_str:
@@ -847,9 +965,18 @@ def main():
         reverse=True
     )
 
+    item_meta = {
+        "imdb_id": imdb_id,
+        "title": item_title,
+        "year": item_year,
+        "type": item_type,
+        "season": season,
+        "episode": episode
+    }
+
     if args.auto:
-        add_to_history({"imdb_id": imdb_id, "title": item_title, "year": item_year, "type": item_type, "season": season, "episode": episode})
-        play_stream(display_streams[0], start_time=args.start, extra_title=f"{item_title}{ep_label}")
+        add_to_history(item_meta)
+        play_stream(display_streams[0], start_time=args.start, extra_title=f"{item_title}{ep_label}", item_metadata=item_meta)
         return
 
     categories = ["All", "⚡ Debrid", "4K", "1080p", "720p"]
@@ -901,16 +1028,9 @@ def main():
     if not selected_stream:
         sys.exit(0)
 
-    add_to_history({
-        "imdb_id": imdb_id,
-        "title": item_title,
-        "year": item_year,
-        "type": item_type,
-        "season": season,
-        "episode": episode
-    })
+    add_to_history(item_meta)
 
-    play_stream(selected_stream, start_time=args.start, extra_title=f"{item_title}{ep_label}")
+    play_stream(selected_stream, start_time=args.start, extra_title=f"{item_title}{ep_label}", item_metadata=item_meta)
 
 if __name__ == "__main__":
     main()
