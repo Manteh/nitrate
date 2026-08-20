@@ -67,11 +67,22 @@ if [ ! -f "$MPV_CONF" ]; then
     cat << 'EOF' > "$MPV_CONF"
 # Studio-grade GPU video rendering (libplacebo)
 vo=gpu-next
-hwdec=auto-safe
+hwdec=auto-copy
+video-sync=display-resample
+interpolation=yes
+tscale=oversample
+
+# macOS HDMI Audio & Sync Stutter Fix
+audio-device=auto
+audio-exclusive=no
+audio-stream-silence=yes
+audio-buffer=0.5
+audio-samplerate=48000
 
 # High-speed Debrid network buffering
 cache=yes
 demuxer-max-bytes=512MiB
+demuxer-readahead-secs=30
 network-timeout=60
 
 # Audio & Subtitle Defaults (English first)
