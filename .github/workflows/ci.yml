@@ -25,11 +25,15 @@ jobs:
         python-version: ${{ matrix.python-version }}
 
     - name: Syntax & Compilation Check
+      env:
+        PYTHONUTF8: "1"
       run: |
         python -m py_compile bin/nitrate
       shell: bash
 
     - name: Test Help Output
+      env:
+        PYTHONUTF8: "1"
       run: |
         python bin/nitrate --help
       shell: bash

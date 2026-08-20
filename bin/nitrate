@@ -16,6 +16,15 @@ import re
 import socket
 import shutil
 
+# Ensure UTF-8 output encoding across Windows / legacy terminals
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # --- Cross-Platform Config Directory ---
 if os.name == "nt":
     CONFIG_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "nitrate")
