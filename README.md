@@ -137,7 +137,7 @@ No manual config file editing. No python dependency hell.
 
 ### 🍎 macOS & 🐧 Linux *(Terminal)*
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Manteh/nitrate/main/install.sh | bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Manteh/nitrate/main/install.sh)"
 ```
 
 ### 🪟 Windows *(PowerShell)*

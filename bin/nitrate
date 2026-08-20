@@ -32,7 +32,7 @@ else:
     CONFIG_DIR = os.path.expanduser("~/.config/nitrate")
 
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 HISTORY_FILE = os.path.join(CONFIG_DIR, "history.json")
 
 # Backwards-compatibility with torrentio-mpv
@@ -535,7 +535,7 @@ def main():
     parser.add_argument("-t", "--start", type=str, default=None, help="Start position (e.g. '-10:00' or '01:15:00')")
     parser.add_argument("-k", "--key", type=str, default=None, help="Debrid API Key")
     parser.add_argument("-y", "--auto", action="store_true", help="Auto-play first stream result")
-    parser.add_argument("-v", "--version", action="version", version="🎬 Nitrate v1.0.0")
+    parser.add_argument("-v", "--version", action="version", version=f"🎬 Nitrate v{VERSION}")
     parser.add_argument("--update", action="store_true", help="Update Nitrate to latest version")
     parser.add_argument("--config", action="store_true", help="Configure Debrid API Keys")
 
