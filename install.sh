@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -e
 
+# Redirect stdin from /dev/tty so piped curl script can read interactive keyboard inputs
+if [ -t 0 ] || [ -e /dev/tty ]; then
+    exec < /dev/tty 2>/dev/null || true
+fi
+
 # ==========================================
 # 🎬 NITRATE — Zero-Friction 1-Line Installer
 # ==========================================
@@ -64,7 +69,7 @@ mkdir -p "$MPV_CONF_DIR"
 
 if [ ! -f "$MPV_CONF" ]; then
     cat << 'EOF' > "$MPV_CONF"
-# Studio-grade GPU video rendering
+# Studio-grade GPU video rendering (libplacebo)
 vo=gpu-next
 hwdec=auto-safe
 
@@ -114,52 +119,113 @@ if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
     echo -e "  ${B_GREEN}✓ Added ~/.local/bin to your PATH in $RC_FILE${RESET}"
 fi
 
-# 4. Interactive Debrid Setup
+# 4. Interactive Debrid Setup (Arrow-Key TUI)
 echo -e "\n${CYAN}▶ Debrid Account Setup (Instant 4K Streaming without VPN)${RESET}"
 CONFIG_DIR="$HOME/.config/nitrate"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 mkdir -p "$CONFIG_DIR"
 
-EXISTING_TB_KEY=""
-EXISTING_RD_KEY=""
-if [ -f "$CONFIG_FILE" ]; then
-    EXISTING_TB_KEY=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('torbox_key', ''))" 2>/dev/null || true)
-    EXISTING_RD_KEY=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('rd_api_key', ''))" 2>/dev/null || true)
-fi
+python3 -c '
+import sys, os, termios, tty, json
 
-echo -e "  ${DIM}A Debrid service (~$3/mo) gives you 100% ISP safety (no VPN needed)${RESET}"
-echo -e "  ${DIM}and instant 1.5s playback on 80GB 4K REMUXes with zero buffering.${RESET}\n"
+CONFIG_DIR = os.path.expanduser("~/.config/nitrate")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
-echo -e "  ${B_WHITE}Select your Debrid provider:${RESET}"
-echo -e "    ${B_CYAN}[1]${RESET} TorBox (Recommended) ──► ${DIM}https://torbox.app/settings${RESET}"
-echo -e "    ${B_CYAN}[2]${RESET} Real-Debrid           ──► ${DIM}https://real-debrid.com/apitoken${RESET}"
-echo -e "    ${B_CYAN}[3]${RESET} Free P2P mode (No Debrid / Direct torrenting)"
+options = [
+    {"name": "TorBox (Recommended)", "link": "https://torbox.app/settings", "key_name": "torbox_key", "prompt": "TorBox API Key"},
+    {"name": "Real-Debrid", "link": "https://real-debrid.com/apitoken", "key_name": "rd_api_key", "prompt": "Real-Debrid API Key"},
+    {"name": "Free P2P mode (No Debrid / Direct torrenting)", "link": "", "key_name": None, "prompt": ""}
+]
 
-echo ""
-read -p "  Choose option [1-3] (Default: 1): " PROVIDER_CHOICE
-PROVIDER_CHOICE=${PROVIDER_CHOICE:-1}
+ESC = "\033["
+RESET = f"{ESC}0m"
+BOLD = f"{ESC}1m"
+DIM = f"{ESC}2m"
+CYAN = f"{ESC}96m"
+GREEN = f"{ESC}92m"
+YELLOW = f"{ESC}93m"
+WHITE = f"{ESC}97m"
 
-if [ "$PROVIDER_CHOICE" = "1" ]; then
-    echo ""
-    echo -e "  ${YELLOW}➔ Get your TorBox API key at: ${BOLD}https://torbox.app/settings${RESET}"
-    read -p "  Paste your TorBox API Key: " USER_KEY
-    USER_KEY=$(echo "$USER_KEY" | xargs)
-    if [ -n "$USER_KEY" ]; then
-        python3 -c "import json; cfg = {'torbox_key': '$USER_KEY'}; json.dump(cfg, open('$CONFIG_FILE', 'w'), indent=2)"
-        echo -e "  ${B_GREEN}✓ TorBox key saved!${RESET}"
-    fi
-elif [ "$PROVIDER_CHOICE" = "2" ]; then
-    echo ""
-    echo -e "  ${YELLOW}➔ Get your Real-Debrid API key at: ${BOLD}https://real-debrid.com/apitoken${RESET}"
-    read -p "  Paste your Real-Debrid API Key: " USER_KEY
-    USER_KEY=$(echo "$USER_KEY" | xargs)
-    if [ -n "$USER_KEY" ]; then
-        python3 -c "import json; cfg = {'rd_api_key': '$USER_KEY'}; json.dump(cfg, open('$CONFIG_FILE', 'w'), indent=2)"
-        echo -e "  ${B_GREEN}✓ Real-Debrid key saved!${RESET}"
-    fi
-else
-    echo -e "  ${DIM}✓ Free P2P mode enabled. You can add a Debrid key anytime via: nitrate --config${RESET}"
-fi
+def get_key():
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+        if ch == "\x1b":
+            ch2 = sys.stdin.read(1)
+            if ch2 == "[":
+                ch3 = sys.stdin.read(1)
+                if ch3 == "A": return "UP"
+                if ch3 == "B": return "DOWN"
+            return "ESC"
+        elif ch in ("\r", "\n"):
+            return "ENTER"
+        elif ch in ("k", "K"):
+            return "UP"
+        elif ch in ("j", "J"):
+            return "DOWN"
+        elif ch in ("1", "2", "3"):
+            return ch
+        return ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+sel = 0
+print(f"  {DIM}A Debrid service (~$3/mo) gives you 100% ISP safety (no VPN needed){RESET}")
+print(f"  {DIM}and instant 1.5s playback on 80GB 4K REMUXes with zero buffering.{RESET}\n")
+
+sys.stdout.write(f"{ESC}?25l")
+try:
+    while True:
+        out = []
+        out.append(f"  {WHITE}{BOLD}Select your Debrid provider:{RESET}")
+        for i, opt in enumerate(options):
+            if i == sel:
+                cursor = f"  {CYAN}❯{RESET} {BOLD}{CYAN}"
+                badge = f"[{i+1}] {opt['name']}"
+                link_str = f" ──► {YELLOW}{opt['link']}{RESET}" if opt["link"] else ""
+                out.append(f"{cursor}{badge}{RESET}{link_str}")
+            else:
+                cursor = "    "
+                badge = f"[{i+1}] {opt['name']}"
+                link_str = f" ──► {DIM}{opt['link']}{RESET}" if opt["link"] else ""
+                out.append(f"{cursor}{DIM}{badge}{link_str}{RESET}")
+
+        out.append(f"\n  {DIM}↑/↓ or j/k: Move | Enter: Select{RESET}")
+        
+        sys.stdout.write("\r" + "\n".join(out))
+        sys.stdout.flush()
+
+        key = get_key()
+        if key == "UP" and sel > 0:
+            sel -= 1
+        elif key == "DOWN" and sel < len(options) - 1:
+            sel += 1
+        elif key in ("1", "2", "3"):
+            sel = int(key) - 1
+            break
+        elif key == "ENTER":
+            break
+
+        sys.stdout.write(f"{ESC}{len(out)-1}A\r{ESC}J")
+finally:
+    sys.stdout.write(f"{ESC}?25h\n\n")
+    sys.stdout.flush()
+
+chosen = options[sel]
+if chosen["key_name"]:
+    print(f"  {YELLOW}➔ Get your {chosen['prompt']} at: {BOLD}{chosen['link']}{RESET}")
+    user_key = input(f"  Paste your {chosen['prompt']}: ").strip()
+    if user_key:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        cfg = {chosen["key_name"]: user_key}
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(cfg, f, indent=2)
+        print(f"  {GREEN}✓ {chosen['prompt']} saved successfully!{RESET}")
+else:
+    print(f"  {DIM}✓ Free P2P mode enabled. You can add a Debrid key anytime via: nitrate --config{RESET}")
+'
 
 # 5. Finished!
 echo -e "\n${B_GREEN}${BOLD}══════════════════════════════════════════════════════════════${RESET}"
