@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
 set -e
 
-# Redirect stdin from /dev/tty so piped curl script can read interactive keyboard inputs
-if [ -t 0 ] || [ -e /dev/tty ]; then
-    exec < /dev/tty 2>/dev/null || true
-fi
-
 # ==========================================
 # 🎬 NITRATE — Zero-Friction 1-Line Installer
 # ==========================================
@@ -41,9 +36,10 @@ echo -e "${CYAN}▶ Checking video player (mpv)...${RESET}"
 if command -v mpv >/dev/null 2>&1; then
     echo -e "  ${B_GREEN}✓ mpv is already installed!${RESET}"
 else
-    echo -e "  ${YELLOW}mpv not found. Installing automatically...${RESET}"
+    echo -e "  ${YELLOW}mpv not found. Installing via Homebrew/package manager...${RESET}"
     if [[ "$OSTYPE" == "darwin"* ]]; then
         if command -v brew >/dev/null 2>&1; then
+            echo -e "  ${DIM}Running brew install mpv...${RESET}"
             brew install mpv
         else
             echo -e "  ${RED}Homebrew not found. Please install Homebrew first: https://brew.sh${RESET}"
@@ -125,6 +121,11 @@ CONFIG_DIR="$HOME/.config/nitrate"
 CONFIG_FILE="$CONFIG_DIR/config.json"
 mkdir -p "$CONFIG_DIR"
 
+TTY_DEV="/dev/tty"
+if [ ! -e "$TTY_DEV" ]; then
+    TTY_DEV="&0"
+fi
+
 python3 -c '
 import sys, os, termios, tty, json
 
@@ -146,16 +147,15 @@ GREEN = f"{ESC}92m"
 YELLOW = f"{ESC}93m"
 WHITE = f"{ESC}97m"
 
-def get_key():
-    fd = sys.stdin.fileno()
+def get_key(fd):
     old = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        ch = sys.stdin.read(1)
+        ch = os.read(fd, 1).decode("utf-8", errors="ignore")
         if ch == "\x1b":
-            ch2 = sys.stdin.read(1)
+            ch2 = os.read(fd, 1).decode("utf-8", errors="ignore")
             if ch2 == "[":
-                ch3 = sys.stdin.read(1)
+                ch3 = os.read(fd, 1).decode("utf-8", errors="ignore")
                 if ch3 == "A": return "UP"
                 if ch3 == "B": return "DOWN"
             return "ESC"
@@ -167,9 +167,16 @@ def get_key():
             return "DOWN"
         elif ch in ("1", "2", "3"):
             return ch
+        elif ch == "\x03":
+            sys.exit(0)
         return ch
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+try:
+    tty_fd = os.open("/dev/tty", os.O_RDWR)
+except Exception:
+    tty_fd = sys.stdin.fileno()
 
 sel = 0
 print(f"  {DIM}A Debrid service (~$3/mo) gives you 100% ISP safety (no VPN needed){RESET}")
@@ -179,7 +186,7 @@ sys.stdout.write(f"{ESC}?25l")
 try:
     while True:
         out = []
-        out.append(f"  {WHITE}{BOLD}Select your Debrid provider:{RESET}")
+        out.append(f"  {WHITE}{BOLD}Select your Debrid provider (Use ↑/↓ and Enter):{RESET}")
         for i, opt in enumerate(options):
             if i == sel:
                 cursor = f"  {CYAN}❯{RESET} {BOLD}{CYAN}"
@@ -197,7 +204,7 @@ try:
         sys.stdout.write("\r" + "\n".join(out))
         sys.stdout.flush()
 
-        key = get_key()
+        key = get_key(tty_fd)
         if key == "UP" and sel > 0:
             sel -= 1
         elif key == "DOWN" and sel < len(options) - 1:
@@ -216,7 +223,28 @@ finally:
 chosen = options[sel]
 if chosen["key_name"]:
     print(f"  {YELLOW}➔ Get your {chosen['prompt']} at: {BOLD}{chosen['link']}{RESET}")
-    user_key = input(f"  Paste your {chosen['prompt']}: ").strip()
+    sys.stdout.write(f"  Paste your {chosen['prompt']}: ")
+    sys.stdout.flush()
+    # Read user input from tty
+    user_key = ""
+    while True:
+        c = os.read(tty_fd, 1).decode("utf-8", errors="ignore")
+        if c in ("\r", "\n"):
+            sys.stdout.write("\n")
+            break
+        elif c in ("\x08", "\x7f"):
+            if user_key:
+                user_key = user_key[:-1]
+                sys.stdout.write("\b \b")
+                sys.stdout.flush()
+        elif c == "\x03":
+            sys.exit(0)
+        else:
+            user_key += c
+            sys.stdout.write(c)
+            sys.stdout.flush()
+
+    user_key = user_key.strip()
     if user_key:
         os.makedirs(CONFIG_DIR, exist_ok=True)
         cfg = {chosen["key_name"]: user_key}
